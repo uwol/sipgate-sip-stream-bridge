@@ -127,6 +127,78 @@ func (m *CallManager) ReleasePort(port int) {
 	m.portPool.Release(port)
 }
 
+// TransferCall sends an in-dialog REFER for an active call.
+// callID is the SIP Call-ID used as the session map key.
+func (m *CallManager) TransferCall(callID, target string) error {
+	v, ok := m.sessions.Load(callID)
+	if !ok {
+		return fmt.Errorf("call not found: %s", callID)
+	}
+	session := v.(*CallSession)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	referTo, err := normalizeReferTarget(target, m.cfg.SIPDomain)
+	if err != nil {
+		return err
+	}
+
+	if err := session.sendRefer(ctx, referTo); err != nil {
+		return err
+	}
+
+	m.log.Info().Str("call_id", callID).Str("target", referTo.String()).Msg("transfer REFER accepted by remote peer")
+	return nil
+}
+
+func normalizeReferTarget(target, defaultDomain string) (siplib.Uri, error) {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return siplib.Uri{}, fmt.Errorf("target must not be empty")
+	}
+
+	if !strings.HasPrefix(t, "sip:") && !strings.HasPrefix(t, "sips:") {
+		if strings.Contains(t, "@") {
+			t = "sip:" + t
+		} else {
+			if defaultDomain == "" {
+				return siplib.Uri{}, fmt.Errorf("target is missing domain and SIP_DOMAIN is empty")
+			}
+			t = "sip:" + t + "@" + defaultDomain
+		}
+	}
+
+	var uri siplib.Uri
+	if err := siplib.ParseUri(t, &uri); err != nil {
+		return siplib.Uri{}, fmt.Errorf("invalid transfer target: %w", err)
+	}
+	return uri, nil
+}
+
+func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
+	s.transferMu.Lock()
+	defer s.transferMu.Unlock()
+
+	recipient := referTo
+	if contact := s.dlg.InviteRequest.Contact(); contact != nil {
+		recipient = contact.Address
+	}
+
+	req := siplib.NewRequest(siplib.REFER, recipient)
+	req.AppendHeader(&siplib.ReferToHeader{Address: referTo})
+
+	res, err := s.dlg.Do(ctx, req)
+	if err != nil {
+		return fmt.Errorf("send REFER failed: %w", err)
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("REFER rejected with %d %s", res.StatusCode, res.Reason)
+	}
+
+	return nil
+}
+
 // StartSession dials WS and runs the RTP bridge. Called in a goroutine by onInvite AFTER
 // the 200 OK has been sent and ACK received (RespondSDP is handled synchronously in onInvite).
 // Blocks until the call ends. Port is released on all exit paths via defer.
@@ -187,6 +259,7 @@ func (m *CallManager) StartSession(
 		cfg:             m.cfg,
 		log:             log,
 		metrics:         m.metrics,
+		onTransfer:      func(target string) error { return m.TransferCall(callID, target) },
 	}
 
 	m.sessions.Store(callID, session)

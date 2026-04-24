@@ -73,6 +73,8 @@ type CallSession struct {
 	markEchoQueue   chan string        // mark names from rtpPacer to wsPacer (capacity 10)
 	clearSignal     chan struct{}      // buffered (1): wsToRTP notifies rtpPacer to drain packetQueue
 	metrics         *observability.Metrics
+	transferMu      sync.Mutex
+	onTransfer      func(target string) error
 }
 
 // run is the full call session lifecycle. Called from StartSession (which runs in a goroutine).
@@ -583,6 +585,34 @@ func (s *CallSession) wsToRTP(ctx context.Context, wsConn net.Conn, wg *sync.Wai
 			if s.metrics != nil {
 				s.metrics.ClearReceived.Inc()
 			}
+
+		case "command":
+			var cmd struct {
+				Command struct {
+					Action string `json:"action"`
+					Target string `json:"target"`
+				} `json:"command"`
+			}
+			if raw, ok := envelope["command"]; ok {
+				if err := json.Unmarshal(raw, &cmd.Command); err != nil {
+					s.log.Warn().Err(err).Str("call_id", s.callID).Msg("wsToRTP: command decode failed — skipping")
+					continue
+				}
+			}
+
+			if cmd.Command.Action != "transfer" {
+				s.log.Debug().Str("call_id", s.callID).Str("action", cmd.Command.Action).Msg("wsToRTP: unsupported command action")
+				continue
+			}
+			if s.onTransfer == nil {
+				s.log.Warn().Str("call_id", s.callID).Msg("wsToRTP: transfer command received but no transfer handler configured")
+				continue
+			}
+			if err := s.onTransfer(cmd.Command.Target); err != nil {
+				s.log.Error().Err(err).Str("call_id", s.callID).Str("target", cmd.Command.Target).Msg("wsToRTP: transfer command failed")
+				continue
+			}
+			s.log.Info().Str("call_id", s.callID).Str("target", cmd.Command.Target).Msg("wsToRTP: transfer command accepted")
 
 		case "stop":
 			// "stop" is a SIP-side teardown signal from the WS consumer (SIP-05).

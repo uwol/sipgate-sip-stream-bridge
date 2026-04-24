@@ -1,0 +1,37 @@
+package bridge
+
+import "testing"
+
+func TestNormalizeReferTarget_URI(t *testing.T) {
+	uri, err := normalizeReferTarget("sip:alice@example.com", "sipconnect.sipgate.de")
+	if err != nil {
+		t.Fatalf("normalizeReferTarget returned error: %v", err)
+	}
+	if got, want := uri.String(), "sip:alice@example.com"; got != want {
+		t.Fatalf("uri mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestNormalizeReferTarget_NumberAddsDomain(t *testing.T) {
+	uri, err := normalizeReferTarget("+4912345", "sipconnect.sipgate.de")
+	if err != nil {
+		t.Fatalf("normalizeReferTarget returned error: %v", err)
+	}
+	if got, want := uri.String(), "sip:+4912345@sipconnect.sipgate.de"; got != want {
+		t.Fatalf("uri mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestNormalizeReferTarget_Invalid(t *testing.T) {
+	_, err := normalizeReferTarget("", "sipconnect.sipgate.de")
+	if err == nil {
+		t.Fatalf("expected error for empty target")
+	}
+}
+
+func TestCallManager_TransferCall_NotFound(t *testing.T) {
+	manager := &CallManager{}
+	if err := manager.TransferCall("missing", "sip:alice@example.com"); err == nil {
+		t.Fatalf("expected not found error")
+	}
+}

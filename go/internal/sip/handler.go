@@ -15,6 +15,7 @@ type CallManagerIface interface {
 	AcquirePort() (int, error)
 	ReleasePort(port int)
 	StartSession(dlg *sipgo.DialogServerSession, req *siplib.Request, callerSDP *CallerSDP, rtpPort int, audioPT uint8, localSRTPKey []byte, localSRTPSalt []byte, log zerolog.Logger)
+	TransferCall(callID, target string) error
 }
 
 // Handler manages inbound SIP dialog state using sipgo.DialogServerCache.

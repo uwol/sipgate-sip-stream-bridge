@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,6 +118,47 @@ func main() {
 	})
 
 	httpMux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
+
+	httpMux.HandleFunc("/calls/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		path := strings.TrimPrefix(r.URL.Path, "/calls/")
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) != 2 || parts[1] != "transfer" || parts[0] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		callID := parts[0]
+
+		var payload struct {
+			Target string `json:"target"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+
+		if err := callManager.TransferCall(callID, payload.Target); err != nil {
+			status := http.StatusBadGateway
+			if strings.HasPrefix(err.Error(), "call not found:") {
+				status = http.StatusNotFound
+			} else if strings.Contains(err.Error(), "target") {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"callId": callID,
+			"status": "accepted",
+		})
+	})
 
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
