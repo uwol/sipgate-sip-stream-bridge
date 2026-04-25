@@ -58,6 +58,7 @@ func NewHandler(agent *Agent, callManager CallManagerIface, cfg config.Config, l
 	agent.Server.OnBye(h.onBye)
 	agent.Server.OnCancel(h.onCancel)
 	agent.Server.OnOptions(h.onOptions)
+	agent.Server.OnNotify(h.onNotify)
 
 	return h
 }
@@ -170,5 +171,34 @@ func (h *Handler) onCancel(req *siplib.Request, tx siplib.ServerTransaction) {
 
 // onOptions sends a 200 OK for SIP OPTIONS keepalive probes (no dialog needed).
 func (h *Handler) onOptions(req *siplib.Request, tx siplib.ServerTransaction) {
+	_ = tx.Respond(siplib.NewResponseFromRequest(req, 200, "OK", nil))
+}
+
+// onNotify accepts in-dialog NOTIFY requests and rejects unknown/out-of-dialog NOTIFY.
+// This keeps REFER transfer behavior unchanged while handling subscription updates correctly.
+func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
+	callID := req.CallID().Value()
+	event := ""
+	if hdr := req.GetHeader("Event"); hdr != nil {
+		event = hdr.Value()
+	}
+	subscriptionState := ""
+	if hdr := req.GetHeader("Subscription-State"); hdr != nil {
+		subscriptionState = hdr.Value()
+	}
+
+	log := h.log.With().
+		Str("call_id", callID).
+		Str("event", event).
+		Str("subscription_state", subscriptionState).
+		Logger()
+
+	if _, err := h.dialogSrv.MatchDialogRequest(req); err != nil {
+		log.Warn().Err(err).Msg("NOTIFY outside/unknown dialog — responding 481")
+		_ = tx.Respond(siplib.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil))
+		return
+	}
+
+	log.Info().Msg("in-dialog NOTIFY received — responding 200 OK")
 	_ = tx.Respond(siplib.NewResponseFromRequest(req, 200, "OK", nil))
 }
