@@ -1,6 +1,8 @@
 package sip
 
 import (
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/emiago/sipgo"
@@ -174,6 +176,45 @@ func (h *Handler) onOptions(req *siplib.Request, tx siplib.ServerTransaction) {
 	_ = tx.Respond(siplib.NewResponseFromRequest(req, 200, "OK", nil))
 }
 
+func compactForLog(s string, max int) string {
+	v := strings.TrimSpace(s)
+	v = strings.ReplaceAll(v, "\r", "\\r")
+	v = strings.ReplaceAll(v, "\n", "\\n")
+	if len(v) <= max {
+		return v
+	}
+	return v[:max] + "...(truncated)"
+}
+
+func parseSIPFrag(body string) (int, string, bool) {
+	line := strings.TrimSpace(body)
+	if line == "" {
+		return 0, "", false
+	}
+
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.TrimRight(line, "\r")
+
+	if !strings.HasPrefix(line, "SIP/2.0 ") {
+		return 0, "", false
+	}
+
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "SIP/2.0 "))
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0, "", false
+	}
+
+	code, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, "", false
+	}
+	reason := strings.TrimSpace(strings.TrimPrefix(rest, fields[0]))
+	return code, reason, true
+}
+
 // onNotify accepts in-dialog NOTIFY requests and rejects unknown/out-of-dialog NOTIFY.
 // This keeps REFER transfer behavior unchanged while handling subscription updates correctly.
 func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
@@ -186,19 +227,38 @@ func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
 	if hdr := req.GetHeader("Subscription-State"); hdr != nil {
 		subscriptionState = hdr.Value()
 	}
+	contentType := ""
+	if hdr := req.GetHeader("Content-Type"); hdr != nil {
+		contentType = hdr.Value()
+	}
+	bodyRaw := string(req.Body())
+	bodyPreview := compactForLog(bodyRaw, 512)
 
 	log := h.log.With().
 		Str("call_id", callID).
 		Str("event", event).
 		Str("subscription_state", subscriptionState).
+		Str("content_type", contentType).
 		Logger()
 
 	if _, err := h.dialogSrv.MatchDialogRequest(req); err != nil {
-		log.Warn().Err(err).Msg("NOTIFY outside/unknown dialog — responding 481")
+		log.Warn().Err(err).Str("notify_body", bodyPreview).Msg("NOTIFY outside/unknown dialog — responding 481")
 		_ = tx.Respond(siplib.NewResponseFromRequest(req, 481, "Call/Transaction Does Not Exist", nil))
 		return
 	}
 
-	log.Info().Msg("in-dialog NOTIFY received — responding 200 OK")
+	if code, reason, ok := parseSIPFrag(bodyRaw); ok {
+		l := log.Info()
+		if code >= 300 {
+			l = log.Warn()
+		}
+		l.
+			Int("sipfrag_status", code).
+			Str("sipfrag_reason", reason).
+			Str("notify_body", bodyPreview).
+			Msg("in-dialog NOTIFY received (REFER progress)")
+	} else {
+		log.Info().Str("notify_body", bodyPreview).Msg("in-dialog NOTIFY received — responding 200 OK")
+	}
 	_ = tx.Respond(siplib.NewResponseFromRequest(req, 200, "OK", nil))
 }
