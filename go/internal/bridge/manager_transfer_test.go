@@ -35,3 +35,14 @@ func TestCallManager_TransferCall_NotFound(t *testing.T) {
 		t.Fatalf("expected not found error")
 	}
 }
+
+func TestCallManager_HandleReferNotify_MissingSession(t *testing.T) {
+	manager := &CallManager{}
+	manager.HandleReferNotify("missing")
+}
+
+func TestCallManager_HandleReferNotify_NilDialog(t *testing.T) {
+	manager := &CallManager{}
+	manager.sessions.Store("call-1", &CallSession{callID: "call-1"})
+	manager.HandleReferNotify("call-1")
+}

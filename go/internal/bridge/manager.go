@@ -59,7 +59,7 @@ func (p *PortPool) Release(port int) {
 // CallManager stores active call sessions and delegates port management to PortPool.
 // Satisfies the sip.CallManagerIface defined in internal/sip/handler.go.
 type CallManager struct {
-	sessions sync.Map   // key: callID string → value: *CallSession
+	sessions sync.Map // key: callID string → value: *CallSession
 	portPool *PortPool
 	cfg      config.Config
 	log      zerolog.Logger
@@ -150,6 +150,32 @@ func (m *CallManager) TransferCall(callID, target string) error {
 
 	m.log.Info().Str("call_id", callID).Str("target", referTo.String()).Msg("transfer REFER accepted by remote peer")
 	return nil
+}
+
+// HandleReferNotify hangs up the original dialog leg when REFER progress NOTIFY is received.
+// Best-effort behavior: missing/ended sessions are ignored to tolerate retransmits and races.
+func (m *CallManager) HandleReferNotify(callID string) {
+	v, ok := m.sessions.Load(callID)
+	if !ok {
+		m.log.Debug().Str("call_id", callID).Msg("REFER NOTIFY for unknown call — session already ended")
+		return
+	}
+
+	session := v.(*CallSession)
+	session.transferMu.Lock()
+	defer session.transferMu.Unlock()
+
+	if session.dlg == nil {
+		m.log.Debug().Str("call_id", callID).Msg("REFER NOTIFY received but dialog is nil — skipping BYE")
+		return
+	}
+
+	if err := session.dlg.Bye(context.Background()); err != nil {
+		m.log.Warn().Err(err).Str("call_id", callID).Msg("REFER NOTIFY hangup failed")
+		return
+	}
+
+	m.log.Info().Str("call_id", callID).Msg("REFER NOTIFY hangup sent (BYE)")
 }
 
 func normalizeReferTarget(target, defaultDomain string) (siplib.Uri, error) {

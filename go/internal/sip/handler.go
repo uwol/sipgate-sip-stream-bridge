@@ -18,6 +18,7 @@ type CallManagerIface interface {
 	ReleasePort(port int)
 	StartSession(dlg *sipgo.DialogServerSession, req *siplib.Request, callerSDP *CallerSDP, rtpPort int, audioPT uint8, localSRTPKey []byte, localSRTPSalt []byte, log zerolog.Logger)
 	TransferCall(callID, target string) error
+	HandleReferNotify(callID string)
 }
 
 // Handler manages inbound SIP dialog state using sipgo.DialogServerCache.
@@ -215,6 +216,24 @@ func parseSIPFrag(body string) (int, string, bool) {
 	return code, reason, true
 }
 
+func isReferEvent(event string) bool {
+	v := strings.ToLower(strings.TrimSpace(event))
+	if v == "" {
+		return false
+	}
+	if i := strings.IndexByte(v, ';'); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	return v == "refer"
+}
+
+func shouldHangupOnReferNotify(event string, sipfragCode int, hasSIPFrag bool) bool {
+	if !isReferEvent(event) || !hasSIPFrag {
+		return false
+	}
+	return sipfragCode >= 200 && sipfragCode < 300
+}
+
 // onNotify accepts in-dialog NOTIFY requests and rejects unknown/out-of-dialog NOTIFY.
 // This keeps REFER transfer behavior unchanged while handling subscription updates correctly.
 func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
@@ -233,6 +252,7 @@ func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
 	}
 	bodyRaw := string(req.Body())
 	bodyPreview := compactForLog(bodyRaw, 512)
+	sipfragCode, sipfragReason, hasSIPFrag := parseSIPFrag(bodyRaw)
 
 	log := h.log.With().
 		Str("call_id", callID).
@@ -247,18 +267,25 @@ func (h *Handler) onNotify(req *siplib.Request, tx siplib.ServerTransaction) {
 		return
 	}
 
-	if code, reason, ok := parseSIPFrag(bodyRaw); ok {
+	if hasSIPFrag {
 		l := log.Info()
-		if code >= 300 {
+		if sipfragCode >= 300 {
 			l = log.Warn()
 		}
 		l.
-			Int("sipfrag_status", code).
-			Str("sipfrag_reason", reason).
+			Int("sipfrag_status", sipfragCode).
+			Str("sipfrag_reason", sipfragReason).
 			Str("notify_body", bodyPreview).
-			Msg("in-dialog NOTIFY received (REFER progress)")
+			Msg("in-dialog NOTIFY received")
 	} else {
 		log.Info().Str("notify_body", bodyPreview).Msg("in-dialog NOTIFY received — responding 200 OK")
 	}
 	_ = tx.Respond(siplib.NewResponseFromRequest(req, 200, "OK", nil))
+
+	if shouldHangupOnReferNotify(event, sipfragCode, hasSIPFrag) {
+		log.Info().Int("sipfrag_status", sipfragCode).Msg("REFER transfer completed — sending BYE on original leg")
+		go h.callManager.HandleReferNotify(callID)
+	} else if isReferEvent(event) {
+		log.Info().Str("notify_body", bodyPreview).Msg("REFER NOTIFY received before final success — keeping original leg")
+	}
 }
