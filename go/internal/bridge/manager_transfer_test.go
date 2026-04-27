@@ -72,3 +72,22 @@ func TestCallManager_EndCall_NilDialog(t *testing.T) {
 		t.Fatalf("expected dialog error, got: %v", err)
 	}
 }
+
+func TestBuildReferredByHeaderValue(t *testing.T) {
+	got, ok := buildReferredByHeaderValue("e12345p0", "fritz.box")
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+	if want := "<sip:e12345p0@fritz.box>"; got != want {
+		t.Fatalf("header mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestBuildReferredByHeaderValue_EmptyInput(t *testing.T) {
+	if got, ok := buildReferredByHeaderValue("", "fritz.box"); ok || got != "" {
+		t.Fatalf("expected empty result for empty user, got ok=%v value=%q", ok, got)
+	}
+	if got, ok := buildReferredByHeaderValue("e12345p0", ""); ok || got != "" {
+		t.Fatalf("expected empty result for empty domain, got ok=%v value=%q", ok, got)
+	}
+}

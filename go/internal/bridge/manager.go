@@ -227,6 +227,16 @@ func normalizeReferTarget(target, defaultDomain string) (siplib.Uri, error) {
 	return uri, nil
 }
 
+func buildReferredByHeaderValue(user, domain string) (string, bool) {
+	user = strings.TrimSpace(user)
+	domain = strings.TrimSpace(domain)
+	if user == "" || domain == "" {
+		return "", false
+	}
+	uri := siplib.Uri{Scheme: "sip", User: user, Host: domain}
+	return "<" + uri.String() + ">", true
+}
+
 func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
 	s.transferMu.Lock()
 	defer s.transferMu.Unlock()
@@ -238,6 +248,9 @@ func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
 
 	req := siplib.NewRequest(siplib.REFER, recipient)
 	req.AppendHeader(&siplib.ReferToHeader{Address: referTo})
+	if referredBy, ok := buildReferredByHeaderValue(s.cfg.SIPUser, s.cfg.SIPDomain); ok {
+		req.AppendHeader(siplib.NewHeader("Referred-By", referredBy))
+	}
 
 	res, err := s.dlg.Do(ctx, req)
 	if err != nil {
