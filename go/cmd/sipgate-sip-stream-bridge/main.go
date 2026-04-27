@@ -127,28 +127,44 @@ func main() {
 
 		path := strings.TrimPrefix(r.URL.Path, "/calls/")
 		parts := strings.Split(strings.Trim(path, "/"), "/")
-		if len(parts) != 2 || parts[1] != "transfer" || parts[0] == "" {
+		if len(parts) != 2 || parts[0] == "" {
 			http.NotFound(w, r)
 			return
 		}
 		callID := parts[0]
+		action := parts[1]
 
-		var payload struct {
-			Target string `json:"target"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
-			return
-		}
-
-		if err := callManager.TransferCall(callID, payload.Target); err != nil {
-			status := http.StatusBadGateway
-			if strings.HasPrefix(err.Error(), "call not found:") {
-				status = http.StatusNotFound
-			} else if strings.Contains(err.Error(), "target") {
-				status = http.StatusBadRequest
+		switch action {
+		case "transfer":
+			var payload struct {
+				Target string `json:"target"`
 			}
-			http.Error(w, err.Error(), status)
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+
+			if err := callManager.TransferCall(callID, payload.Target); err != nil {
+				status := http.StatusBadGateway
+				if strings.HasPrefix(err.Error(), "call not found:") {
+					status = http.StatusNotFound
+				} else if strings.Contains(err.Error(), "target") {
+					status = http.StatusBadRequest
+				}
+				http.Error(w, err.Error(), status)
+				return
+			}
+		case "bye":
+			if err := callManager.EndCall(callID); err != nil {
+				status := http.StatusBadGateway
+				if strings.HasPrefix(err.Error(), "call not found:") {
+					status = http.StatusNotFound
+				}
+				http.Error(w, err.Error(), status)
+				return
+			}
+		default:
+			http.NotFound(w, r)
 			return
 		}
 

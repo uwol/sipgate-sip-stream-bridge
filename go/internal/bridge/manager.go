@@ -152,6 +152,31 @@ func (m *CallManager) TransferCall(callID, target string) error {
 	return nil
 }
 
+// EndCall sends SIP BYE for a single active call.
+func (m *CallManager) EndCall(callID string) error {
+	v, ok := m.sessions.Load(callID)
+	if !ok {
+		return fmt.Errorf("call not found: %s", callID)
+	}
+
+	session := v.(*CallSession)
+	session.transferMu.Lock()
+	defer session.transferMu.Unlock()
+
+	if session.dlg == nil {
+		m.log.Debug().Str("call_id", callID).Msg("end call requested but dialog is nil")
+		return fmt.Errorf("call dialog unavailable: %s", callID)
+	}
+
+	if err := session.dlg.Bye(context.Background()); err != nil {
+		m.log.Warn().Err(err).Str("call_id", callID).Msg("failed to send BYE")
+		return err
+	}
+
+	m.log.Info().Str("call_id", callID).Msg("BYE sent")
+	return nil
+}
+
 // HandleReferNotify hangs up the original dialog leg when REFER progress NOTIFY is received.
 // Best-effort behavior: missing/ended sessions are ignored to tolerate retransmits and races.
 func (m *CallManager) HandleReferNotify(callID string) {

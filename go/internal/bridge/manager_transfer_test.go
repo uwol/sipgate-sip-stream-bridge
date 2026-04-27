@@ -1,6 +1,9 @@
 package bridge
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeReferTarget_URI(t *testing.T) {
 	uri, err := normalizeReferTarget("sip:alice@example.com", "sipconnect.sipgate.de")
@@ -45,4 +48,27 @@ func TestCallManager_HandleReferNotify_NilDialog(t *testing.T) {
 	manager := &CallManager{}
 	manager.sessions.Store("call-1", &CallSession{callID: "call-1"})
 	manager.HandleReferNotify("call-1")
+}
+
+func TestCallManager_EndCall_NotFound(t *testing.T) {
+	manager := &CallManager{}
+	err := manager.EndCall("missing")
+	if err == nil {
+		t.Fatalf("expected not found error")
+	}
+	if !strings.HasPrefix(err.Error(), "call not found:") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCallManager_EndCall_NilDialog(t *testing.T) {
+	manager := &CallManager{}
+	manager.sessions.Store("call-1", &CallSession{callID: "call-1"})
+	err := manager.EndCall("call-1")
+	if err == nil {
+		t.Fatalf("expected error for nil dialog")
+	}
+	if !strings.Contains(err.Error(), "dialog") {
+		t.Fatalf("expected dialog error, got: %v", err)
+	}
 }
