@@ -248,14 +248,17 @@ func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
 
 	req := siplib.NewRequest(siplib.REFER, recipient)
 	req.AppendHeader(&siplib.ReferToHeader{Address: referTo})
+
 	if referredBy, ok := buildReferredByHeaderValue(s.cfg.SIPUser, s.cfg.SIPDomain); ok {
 		req.AppendHeader(siplib.NewHeader("Referred-By", referredBy))
 	}
 
 	res, err := s.dlg.Do(ctx, req)
+
 	if err != nil {
 		return fmt.Errorf("send REFER failed: %w", err)
 	}
+
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("REFER rejected with %d %s", res.StatusCode, res.Reason)
 	}
