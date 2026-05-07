@@ -242,9 +242,18 @@ func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
 	defer s.transferMu.Unlock()
 
 	recipient := referTo
+	inviteContact := ""
 	if contact := s.dlg.InviteRequest.Contact(); contact != nil {
 		recipient = contact.Address
+		inviteContact = contact.Address.String()
 	}
+
+	s.log.Info().
+		Str("call_id", s.callID).
+		Str("refer_recipient", recipient.String()).
+		Str("refer_to", referTo.String()).
+		Str("invite_contact", inviteContact).
+		Msg("sending in-dialog REFER")
 
 	req := siplib.NewRequest(siplib.REFER, recipient)
 	req.AppendHeader(&siplib.ReferToHeader{Address: referTo})
@@ -260,8 +269,33 @@ func (s *CallSession) sendRefer(ctx context.Context, referTo siplib.Uri) error {
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		allow := ""
+		if h := res.GetHeader("Allow"); h != nil {
+			allow = h.Value()
+		}
+		supported := ""
+		if h := res.GetHeader("Supported"); h != nil {
+			supported = h.Value()
+		}
+
+		s.log.Warn().
+			Str("call_id", s.callID).
+			Int("status", int(res.StatusCode)).
+			Str("reason", res.Reason).
+			Str("allow", allow).
+			Str("supported", supported).
+			Str("refer_recipient", recipient.String()).
+			Str("refer_to", referTo.String()).
+			Msg("in-dialog REFER rejected by remote peer")
+
 		return fmt.Errorf("REFER rejected with %d %s", res.StatusCode, res.Reason)
 	}
+
+	s.log.Info().
+		Str("call_id", s.callID).
+		Str("refer_recipient", recipient.String()).
+		Str("refer_to", referTo.String()).
+		Msg("in-dialog REFER accepted by remote peer")
 
 	return nil
 }
